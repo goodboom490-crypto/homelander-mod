@@ -1,0 +1,86 @@
+package com.example.homelander;
+
+import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
+import net.minecraft.client.option.KeyBinding;
+import net.minecraft.client.util.InputUtil;
+import net.minecraft.particle.ParticleTypes;
+import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.util.hit.HitResult;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Vec3d;
+import org.lwjgl.glfw.GLFW;
+
+public class HomelanderClient implements ClientModInitializer {
+    private static KeyBinding laserKey;
+    private static KeyBinding flyKey;
+    private static boolean flightActive = false;
+
+    @Override
+    public void onInitializeClient() {
+        // Регистрация клавиш (G - Лазеры, V - Полет)
+        laserKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
+                "key.homelander.laser", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_G, "category.homelander"
+        ));
+        flyKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
+                "key.homelander.fly", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_V, "category.homelander"
+        ));
+
+        ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            if (client.player == null || client.world == null) return;
+
+            // 1. Переключение полета
+            while (flyKey.wasPressed()) {
+                flightActive = !flightActive;
+                client.player.getAbilities().flying = flightActive;
+                client.player.getAbilities().allowFlying = flightActive;
+            }
+
+            // 2. Стрельба лазерами при зажатии G
+            if (laserKey.isPressed()) {
+                executeEyeLasers(client);
+            }
+
+            // 3. Ломка блоков перед собой на высокой скорости полета
+            if (flightActive && client.player.getVelocity().lengthSquared() > 0.6) {
+                breakWallsInFront(client);
+            }
+        });
+    }
+
+    private void executeEyeLasers(net.minecraft.client.MinecraftClient client) {
+        var player = client.player;
+        HitResult hit = player.raycast(50.0, 1.0f, false);
+
+        Vec3d start = player.getEyePos();
+        Vec3d end = hit.getPos();
+        Vec3d dir = end.subtract(start).normalize();
+
+        for (double d = 0; d < start.distanceTo(end); d += 0.5) {
+            Vec3d point = start.add(dir.multiply(d));
+            client.world.addParticle(ParticleTypes.FLAME, point.x, point.y, point.z, 0, 0, 0);
+            client.world.addParticle(ParticleTypes.LAVA, point.x, point.y, point.z, 0, 0, 0);
+        }
+
+        if (hit.getType() == HitResult.Type.BLOCK) {
+            BlockPos pos = ((BlockHitResult) hit).getBlockPos();
+            client.interactionManager.breakBlock(pos);
+        }
+    }
+
+    private void breakWallsInFront(net.minecraft.client.MinecraftClient client) {
+        var player = client.player;
+        Vec3d velocityDir = player.getVelocity().normalize();
+        BlockPos frontPos = player.getBlockPos().add(
+                (int) Math.round(velocityDir.x),
+                (int) Math.round(velocityDir.y + 1),
+                (int) Math.round(velocityDir.z)
+        );
+
+        if (!client.world.getBlockState(frontPos).isAir()) {
+            client.interactionManager.breakBlock(frontPos);
+            client.world.addParticle(ParticleTypes.EXPLOSION, frontPos.getX(), frontPos.getY(), frontPos.getZ(), 0, 0, 0);
+        }
+    }
+}
